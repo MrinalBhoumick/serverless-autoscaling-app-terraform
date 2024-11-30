@@ -1,3 +1,4 @@
+# Data source to get the current AWS account ID
 data "aws_caller_identity""current" {}
 
 #---------------------Create Custom VPC----------------------
@@ -8,7 +9,7 @@ resource "aws_vpc""CustomVPC" {
   enable_dns_hostnames = true
 
   tags = {
-    Name = "Serverless-VPC"
+    Name = "CustomVPC"
   }
 }
 #---------------------Create IGW And associate with VPC----------------------
@@ -16,29 +17,29 @@ resource "aws_internet_gateway""IGW" {
   vpc_id = aws_vpc.CustomVPC.id
 
   tags = {
-    Name = "Serverless-IGW"
+    Name = "IGW"
   }
 }
 #---------------------Create 2 Public Subnets----------------------
 resource "aws_subnet""PublicSubnet1" {
   vpc_id                  = aws_vpc.CustomVPC.id
   cidr_block              = "10.0.0.0/18"
-  availability_zone       = "ap-southeast-1a"
+  availability_zone       = "us-west-2a"
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "Pub-Sub-1"
+    Name = "PublicSubnet1"
     Type = "Public"
   }
 }
 resource "aws_subnet""PublicSubnet2" {
   vpc_id                  = aws_vpc.CustomVPC.id
   cidr_block              = "10.0.64.0/18"
-  availability_zone       = "ap-sotheast-1b"
+  availability_zone       = "us-west-2b"
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "Pub-Sub-2"
+    Name = "PublicSubnet2"
     Type = "Public"
   }
 }
@@ -51,7 +52,7 @@ resource "aws_route_table""PublicRouteTable" {
     gateway_id = aws_internet_gateway.IGW.id
   }
   tags = {
-    Name = "Pub-RT"
+    Name = "PublicRouteTable"
   }
 }
 #---------------------Create route table association with public route table----------------------
@@ -67,7 +68,7 @@ resource "aws_route_table_association""PublicSubnetRouteTableAssociation2" {
 
 #----------------------Create Target Group--------------------------
 resource "aws_lb_target_group""CustomTG" {
-  name        = "Custom-TG"
+  name        = "CustomTG"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = aws_vpc.CustomVPC.id
@@ -154,7 +155,7 @@ resource "aws_lb_listener""http" {
     }
   }
 }
-# Set up CloudWatch group and log stream and retain logs for 30 days
+# Set up CloudWatch group and log stream and retain logs for 3 days
 resource "aws_cloudwatch_log_group""cb_log_group" {
   name              = "/ecs/cb-app"
   retention_in_days = 3
@@ -171,7 +172,7 @@ resource "aws_cloudwatch_log_stream""cb_log_stream" {
 
 # Create an ECR repository
 resource "aws_ecr_repository""my_app" {
-  name                 = "serverless-web-app"
+  name                 = "my-app"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
 }
@@ -180,12 +181,12 @@ resource "aws_ecr_repository""my_app" {
 resource "null_resource""docker_build_push" {
   depends_on = [aws_ecr_repository.my_app]
   provisioner "local-exec" {
-    interpreter = ["bash", "-c"]
+    interpreter = ["powershell", "-Command"]
     command     = <<-EOT
-      aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.ap-southeast-1.amazonaws.com
-      docker build -t serverless-web-app .
-      docker tag serverless-web-app:latest ${data.aws_caller_identity.current.account_id}.dkr.ecr.ap-sotheast-1.amazonaws.com/serverless-web-app:latest
-      docker push ${data.aws_caller_identity.current.account_id}.dkr.ecr.ap-southeast-1.amazonaws.com/serverless-web-app:latest
+      docker login -u AWS -p $(aws ecr get-login-password --region us-west-2) 510881116058.dkr.ecr.us-west-2.amazonaws.com
+      docker build -t my-python-app .
+      docker tag my-python-app:latest ${data.aws_caller_identity.current.account_id}.dkr.ecr.us-west-2.amazonaws.com/my-app:latest
+      docker push ${data.aws_caller_identity.current.account_id}.dkr.ecr.us-west-2.amazonaws.com/my-app:latest
     EOT
   }
 }
@@ -245,7 +246,7 @@ resource "aws_iam_role""custom-ecs-role" {
 }
 
 resource "aws_ecs_cluster""my_cluster" {
-  name = "serverless-ecs-cluster"
+  name = "my-ecs-cluster"
 }
 
 # ECS Task security group
@@ -269,7 +270,7 @@ resource "aws_security_group""ecs_task_sg" {
 
 # Create an ECS service
 resource "aws_ecs_service""my_service" {
-  name            = "serverless-service"
+  name            = "my-service"
   cluster         = aws_ecs_cluster.my_cluster.id
   task_definition = aws_ecs_task_definition.my_task.arn
   launch_type     = "FARGATE"
@@ -307,7 +308,7 @@ resource "aws_ecs_task_definition""my_task" {
 
   container_definitions = jsonencode([{
     name  = "ECS_Container"
-    image = "${data.aws_caller_identity.current.account_id}.dkr.ecr.ap-southeast-1.amazonaws.com/serverless-web-app:latest"
+    image = "${data.aws_caller_identity.current.account_id}.dkr.ecr.us-west-2.amazonaws.com/my-app:latest"
     portMappings = [{
       containerPort = 80
       hostPort      = 80
@@ -317,7 +318,7 @@ resource "aws_ecs_task_definition""my_task" {
       "logDriver" : "awslogs",
       "options" : {
         "awslogs-group" : "/ecs/cb-app",
-        "awslogs-region" : "ap-southeast-1",
+        "awslogs-region" : "us-west-2",
         "awslogs-stream-prefix" : "ecs"
       }
     }
@@ -383,7 +384,7 @@ resource "aws_cloudwatch_metric_alarm""scale_out_alarm" {
   namespace           = "AWS/ECS"
   period              = "60"
   statistic           = "Average"
-  threshold           = "85"
+  threshold           = "75"
   alarm_description   = "Alarm for scaling out ECS service"
   dimensions = {
     ClusterName = aws_ecs_cluster.my_cluster.name
@@ -402,7 +403,7 @@ resource "aws_cloudwatch_metric_alarm""scale_in_alarm" {
   namespace           = "AWS/ECS"
   period              = "60"
   statistic           = "Average"
-  threshold           = "15"
+  threshold           = "25"
   alarm_description   = "Alarm for scaling in ECS service"
   dimensions = {
     ClusterName = aws_ecs_cluster.my_cluster.name
